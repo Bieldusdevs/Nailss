@@ -1,0 +1,377 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum PatronRole {
+  CLIENT
+  ARTIST
+  ADMIN
+}
+
+enum AppointmentState {
+  HOLD
+  AWAITING_PAYMENT
+  CONFIRMED
+  COMPLETED
+  CANCELLED
+  EXPIRED
+  NO_SHOW
+}
+
+model Client {
+  id                String             @id @default(cuid())
+  name              String
+  email             String             @unique
+  passwordHash      String
+  phone             String             @default("")
+  nif               String             @default("")
+  street            String             @default("")
+  postalCode        String             @default("")
+  city              String             @default("")
+  role              PatronRole         @default(CLIENT)
+  preferences       Json               @default("{}")
+  emailVerified     DateTime?
+  sessionVersion    Int                @default(0)
+  privacyAcceptedAt DateTime
+  marketingAllowed  Boolean            @default(false)
+  deletedAt         DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+  appointments      Appointment[]
+  tokens            IdentityToken[]
+  loyaltyEntries    LoyaltyEntry[]
+  redemptions       Redemption[]
+  artist            Artist?
+  bookingPreference BookingPreference?
+}
+
+model IdentityToken {
+  id        String    @id @default(cuid())
+  clientId  String
+  client    Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  hash      String    @unique
+  kind      String
+  expiresAt DateTime
+  usedAt    DateTime?
+
+  @@index([clientId, kind])
+}
+
+model Category {
+  id          String      @id
+  name        String
+  icon        String
+  description String
+  position    Int
+  treatments  Treatment[]
+}
+
+model Treatment {
+  id              String           @id
+  slug            String           @unique
+  categoryId      String
+  category        Category         @relation(fields: [categoryId], references: [id])
+  name            String
+  summary         String
+  description     String
+  durationMinutes Int
+  prepMinutes     Int              @default(5)
+  finishMinutes   Int              @default(5)
+  priceCents      Int
+  depositCents    Int              @default(0)
+  materials       String[]
+  technique       String
+  image           String
+  active          Boolean          @default(true)
+  position        Int              @default(0)
+  artists         Artist[]
+  appointments    Appointment[]
+  gallery         PortfolioPiece[]
+  updatedAt       DateTime         @updatedAt
+}
+
+model Artist {
+  id              String           @id
+  name            String
+  title           String
+  bio             String
+  specialities    String[]
+  experienceYears Int?
+  image           String?
+  bufferMinutes   Int              @default(10)
+  active          Boolean          @default(true)
+  clientId        String?          @unique
+  client          Client?          @relation(fields: [clientId], references: [id])
+  treatments      Treatment[]
+  workingWindows  WorkingWindow[]
+  blocks          CalendarBlock[]
+  appointments    Appointment[]
+  pieces          PortfolioPiece[]
+}
+
+model WorkingWindow {
+  id          String @id @default(cuid())
+  artistId    String
+  artist      Artist @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  weekday     Int
+  startMinute Int
+  endMinute   Int
+
+  @@unique([artistId, weekday, startMinute])
+}
+
+model CalendarBlock {
+  id       String   @id @default(cuid())
+  artistId String
+  artist   Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  startsAt DateTime @db.Timestamptz(3)
+  endsAt   DateTime @db.Timestamptz(3)
+  reason   String
+
+  @@index([artistId, startsAt, endsAt])
+}
+
+model Appointment {
+  id                String           @id @default(cuid())
+  reference         String           @unique
+  clientId          String
+  client            Client           @relation(fields: [clientId], references: [id])
+  artistId          String
+  artist            Artist           @relation(fields: [artistId], references: [id])
+  treatmentId       String
+  treatment         Treatment        @relation(fields: [treatmentId], references: [id])
+  treatmentName     String
+  rescheduleFromId  String?
+  durationMinutes   Int
+  startsAt          DateTime         @db.Timestamptz(3)
+  endsAt            DateTime         @db.Timestamptz(3)
+  occupiedUntil     DateTime         @db.Timestamptz(3)
+  status            AppointmentState @default(HOLD)
+  expiresAt         DateTime?
+  priceCents        Int
+  depositCents      Int              @default(0)
+  discountCents     Int              @default(0)
+  notes             String           @default("")
+  policyVersion     String           @default("2026-09-04")
+  cancellationHours Int              @default(24)
+  policyAcceptedAt  DateTime?
+  cancelledAt       DateTime?
+  completedAt       DateTime?
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+  payment           Payment?
+  review            VerifiedReview?
+  loyaltyEntry      LoyaltyEntry?
+  redemptionId      String?          @unique
+  redemption        Redemption?      @relation(fields: [redemptionId], references: [id])
+
+  @@index([artistId, startsAt, occupiedUntil])
+  @@index([clientId, status])
+  @@index([status, expiresAt])
+}
+
+model Payment {
+  id                 String          @id @default(cuid())
+  appointmentId      String          @unique
+  appointment        Appointment     @relation(fields: [appointmentId], references: [id])
+  provider           String          @default("stripe")
+  checkoutId         String?         @unique
+  checkoutRequest    Json?
+  intentId           String?         @unique
+  amountCents        Int
+  status             String          @default("PENDING")
+  refundId           String?         @unique
+  refundRequestedAt  DateTime?
+  refundedCents      Int             @default(0)
+  lastCheckedAt      DateTime?
+  refundLastError    String?
+  refundRequestCents Int?
+  refundAttempt      Int             @default(0)
+  refundAttemptedAt  DateTime?
+  refunds            DepositRefund[]
+  createdAt          DateTime        @default(now())
+  updatedAt          DateTime        @updatedAt
+}
+
+model DepositRefund {
+  id                String   @id
+  paymentId         String
+  payment           Payment  @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  amountCents       Int
+  status            String
+  providerCreatedAt DateTime
+  automaticAttempt  Int?
+  observedAt        DateTime @default(now())
+
+  @@index([paymentId])
+}
+
+model WebhookReceipt {
+  id          String   @id
+  processedAt DateTime @default(now())
+}
+
+model VerifiedReview {
+  id            String      @id @default(cuid())
+  appointmentId String      @unique
+  appointment   Appointment @relation(fields: [appointmentId], references: [id])
+  rating        Int
+  comment       String
+  approved      Boolean     @default(false)
+  createdAt     DateTime    @default(now())
+}
+
+model LoyaltyEntry {
+  id            String       @id @default(cuid())
+  clientId      String
+  client        Client       @relation(fields: [clientId], references: [id])
+  appointmentId String?      @unique
+  appointment   Appointment? @relation(fields: [appointmentId], references: [id])
+  points        Int
+  reason        String
+  redemptionId  String?      @unique
+  createdAt     DateTime     @default(now())
+
+  @@index([clientId])
+}
+
+model Redemption {
+  id          String       @id @default(cuid())
+  clientId    String
+  client      Client       @relation(fields: [clientId], references: [id])
+  kind        String
+  code        String       @unique
+  expiresAt   DateTime
+  createdAt   DateTime     @default(now())
+  appointment Appointment?
+
+  @@index([clientId])
+}
+
+model PortfolioPiece {
+  id            String    @id
+  name          String
+  technique     String
+  image         String
+  imageAlt      String
+  credit        String
+  sourceUrl     String
+  isInspiration Boolean   @default(true)
+  treatmentId   String
+  treatment     Treatment @relation(fields: [treatmentId], references: [id])
+  artistId      String?
+  artist        Artist?   @relation(fields: [artistId], references: [id])
+  position      Int
+}
+
+model Correspondence {
+  id            String    @id @default(cuid())
+  dedupeKey     String    @unique
+  appointmentId String?
+  channel       String    @default("EMAIL")
+  recipient     String
+  subject       String
+  body          String
+  state         String    @default("PENDING")
+  attempts      Int       @default(0)
+  dueAt         DateTime  @default(now())
+  leaseUntil    DateTime?
+  sentAt        DateTime?
+  providerId    String?
+  lastErrorCode String?
+  createdAt     DateTime  @default(now())
+
+  @@index([state, dueAt])
+}
+
+model ContactLetter {
+  id        String   @id @default(cuid())
+  name      String
+  email     String
+  message   String
+  createdAt DateTime @default(now())
+}
+
+model AgendaEvent {
+  id        String   @id @default(cuid())
+  kind      String
+  artistId  String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+model AuditEvent {
+  id        String   @id @default(cuid())
+  kind      String
+  actorId   String?
+  entityId  String?
+  metadata  Json     @default("{}")
+  createdAt DateTime @default(now())
+
+  @@index([actorId, createdAt])
+}
+
+model RequestWindow {
+  key       String   @id
+  count     Int      @default(1)
+  expiresAt DateTime
+}
+
+model AtelierSetting {
+  id    String @id @default("atelier")
+  value Json
+}
+
+model BookingPreference {
+  clientId     String    @id
+  client       Client    @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  treatmentId  String
+  artistId     String
+  preferredDay String
+  revision     Int       @default(1)
+  draftId      String?
+  clearedAt    DateTime?
+  updatedAt    DateTime  @updatedAt
+}
+
+model AtelierOpeningPlan {
+  id          String                    @id @default("atelier")
+  revision    Int                       @default(1)
+  weeklyHours Json
+  updatedAt   DateTime                  @updatedAt
+  exceptions  AtelierOpeningException[]
+}
+
+model AtelierOpeningException {
+  date        String             @id
+  planId      String             @default("atelier")
+  plan        AtelierOpeningPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+  intervals   Json
+  publicLabel String
+  updatedAt   DateTime           @updatedAt
+}
+
+model AtelierJobPulse {
+  id            String    @id @default("maintenance")
+  runId         String
+  state         String
+  startedAt     DateTime
+  finishedAt    DateTime?
+  durationMs    Int?
+  lastErrorCode String?
+}
+
+model IntegrationObservation {
+  kind        String   @id
+  environment String
+  fingerprint String
+  mode        String?
+  observedAt  DateTime @default(now())
+}
